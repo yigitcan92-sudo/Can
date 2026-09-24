@@ -93,10 +93,20 @@ function seed() {
   return { nextId: id, ssv, tsa, responsibles, profiles: DEMO_USERS, dossier: [], documents: [], history };
 }
 
+// Browseropslag kan geblokkeerd zijn (privévenster, ingesloten frames): nooit laten crashen
+const store = {
+  get: (s, k) => { try { return s().getItem(k); } catch { return null; } },
+  set: (s, k, v) => { try { s().setItem(k, v); return true; } catch { return false; } },
+  del: (s, k) => { try { s().removeItem(k); } catch { /* genegeerd */ } },
+};
+const local = () => localStorage;
+const session = () => sessionStorage;
+let memorySession = null;
+
 export function createDemoBackend() {
   let db;
   try {
-    db = JSON.parse(localStorage.getItem(KEY)) || seed();
+    db = JSON.parse(store.get(local, KEY)) || seed();
   } catch {
     db = seed();
   }
@@ -105,11 +115,7 @@ export function createDemoBackend() {
   const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('fiberklaar-demo') : null;
 
   const persist = () => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(db));
-    } catch (e) {
-      throw new Error('Opslag vol (demo-modus bewaart alles in de browser)');
-    }
+    store.set(local, KEY, JSON.stringify(db));
   };
   persist();
 
@@ -118,12 +124,14 @@ export function createDemoBackend() {
     if (broadcast) channel?.postMessage(evt);
   }
   channel?.addEventListener('message', (m) => {
-    db = JSON.parse(localStorage.getItem(KEY)) || db;
+    try {
+      db = JSON.parse(store.get(local, KEY)) || db;
+    } catch { /* oude stand houden */ }
     emit(m.data, false);
   });
 
   const me = () => {
-    const id = sessionStorage.getItem(SESSION_KEY);
+    const id = store.get(session, SESSION_KEY) ?? memorySession;
     return db.profiles.find((p) => p.id === id) || null;
   };
   const role = () => me()?.role;
@@ -159,18 +167,20 @@ export function createDemoBackend() {
       return () => authListeners.delete(cb);
     },
     async signIn(userId) {
-      sessionStorage.setItem(SESSION_KEY, userId);
+      memorySession = userId;
+      store.set(session, SESSION_KEY, userId);
       authListeners.forEach((cb) => cb({ user: { id: userId } }));
     },
     async signOut() {
-      sessionStorage.removeItem(SESSION_KEY);
+      memorySession = null;
+      store.del(session, SESSION_KEY);
       authListeners.forEach((cb) => cb(null));
     },
     async getProfile() {
       return clone(me());
     },
     resetDemo() {
-      localStorage.removeItem(KEY);
+      store.del(local, KEY);
       window.location.reload();
     },
 
